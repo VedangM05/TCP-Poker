@@ -51,10 +51,10 @@ std::string displayCards(const std::vector<std::string> &cards) {
 // ===== REWRITTEN: Receive Thread =====
 void receiveMessages() {
     char buffer[1024];
-    std::string networkBuffer = ""; 
-    
+    std::string networkBuffer = "";
+
     while(true) {
-        int valread = read(g_sock, buffer, 1023); 
+        int valread = read(g_sock, buffer, 1023);
         if(valread <= 0) {
             std::cout << "Disconnected from server." << std::endl;
             g_myTurn = false;
@@ -70,9 +70,8 @@ void receiveMessages() {
             networkBuffer.erase(0, pos + 1);
 
             // --- Process the clean message ---
-            
+
             if (msg.find("GAME_STARTING") != std::string::npos) {
-                // NEW: Clear old cards and announce the new hand
                 g_communityCards.clear();
                 std::cout << "\n-------------------------------\n";
                 std::cout << "--- NEW HAND STARTING ---\n" << std::endl;
@@ -86,9 +85,7 @@ void receiveMessages() {
                 std::string rest = msg.substr(5);
                 std::stringstream ss_cards(rest);
                 std::string card;
-                while (ss_cards >> card) {
-                    g_holeCards.push_back(card);
-                }
+                while (ss_cards >> card) { g_holeCards.push_back(card); }
                 std::cout << "--- Your Hole Cards ---" << std::endl;
                 std::cout << displayCards(g_holeCards) << std::endl;
             }
@@ -97,24 +94,14 @@ void receiveMessages() {
                 std::string rest = msg.substr(6);
                 std::stringstream ss_cards(rest);
                 std::string card;
-                while (ss_cards >> card) {
-                    g_communityCards.push_back(card);
-                }
-                
-                // --- FIX: Display cards on separate lines ---
-                if (g_communityCards.size() == 3) {
-                    std::cout << "\n--- FLOP ---";
-                } else if (g_communityCards.size() == 4) {
-                    std::cout << "\n--- TURN ---";
-                } else if (g_communityCards.size() == 5) {
-                    std::cout << "\n--- RIVER ---";
-                }
+                while (ss_cards >> card) { g_communityCards.push_back(card); }
 
-                // Display hand
+                if (g_communityCards.size() == 3) std::cout << "\n--- FLOP ---";
+                else if (g_communityCards.size() == 4) std::cout << "\n--- TURN ---";
+                else if (g_communityCards.size() == 5) std::cout << "\n--- RIVER ---";
+
                 std::cout << "\n--- Your Hand ---" << std::endl;
                 std::cout << displayCards(g_holeCards);
-                
-                // Display community cards
                 std::cout << "--- Community Cards ---" << std::endl;
                 std::cout << displayCards(g_communityCards) << std::endl;
             }
@@ -127,8 +114,36 @@ void receiveMessages() {
                     std::cout << "[" << name << "]: " << chatMsg << std::endl;
                 }
             }
+            // --- NEW: Check for Showdown Hand Message ---
+            else if (msg.find("'s hand: ") != std::string::npos) {
+                // Found a message like "ved's hand: KD KH"
+                std::string translated_msg = msg;
+                // Replace letters with symbols
+                size_t start_pos = 0;
+                while((start_pos = translated_msg.find("H", start_pos)) != std::string::npos) {
+                    translated_msg.replace(start_pos, 1, "♥");
+                    start_pos += std::string("♥").length(); // Move past the replaced symbol
+                }
+                start_pos = 0;
+                 while((start_pos = translated_msg.find("D", start_pos)) != std::string::npos) {
+                    translated_msg.replace(start_pos, 1, "♦");
+                    start_pos += std::string("♦").length();
+                }
+                 start_pos = 0;
+                 while((start_pos = translated_msg.find("C", start_pos)) != std::string::npos) {
+                    translated_msg.replace(start_pos, 1, "♣");
+                    start_pos += std::string("♣").length();
+                }
+                 start_pos = 0;
+                 while((start_pos = translated_msg.find("S", start_pos)) != std::string::npos) {
+                    translated_msg.replace(start_pos, 1, "♠");
+                    start_pos += std::string("♠").length();
+                }
+                std::cout << translated_msg << std::endl; // Print translated version
+            }
+            // --- End Showdown Hand Check ---
             else {
-                // Print all other server messages
+                // Print all other server messages normally
                 std::cout << msg << std::endl;
             }
         }
