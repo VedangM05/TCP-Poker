@@ -130,15 +130,25 @@ void receiveMessages() {
                     std::cout << "[" << YELLOW << name << RESET << "]: " << chatMsg << std::endl;
                 }
             }
+            // ===== MODIFIED: This block now parses cards =====
             else if (msg.find("'s hand: ") != std::string::npos) {
-                // Showdown hands - Already handled by displayCards logic if we parsed into cards
-                // For simplicity, just color the name for now.
-                 size_t nameEndPos = msg.find("'s hand: ");
-                 std::string name = msg.substr(0, nameEndPos);
-                 std::string rest = msg.substr(nameEndPos);
-                 std::cout << YELLOW << name << RESET << rest << std::endl;
-                 // We could parse 'rest' into cards and use displayCards for colored suits here too.
+                // Parse showdown hands and use displayCards
+                size_t nameEndPos = msg.find("'s hand: ");
+                std::string name = msg.substr(0, nameEndPos);
+                // Get the card part (e.g., "4C JD") which starts after "'s hand: " (10 chars)
+                std::string cardData = msg.substr(nameEndPos + 10); 
+
+                std::vector<std::string> showdownCards;
+                std::stringstream ss_cards(cardData);
+                std::string card;
+                while (ss_cards >> card) {
+                    showdownCards.push_back(card);
+                }
+
+                std::cout << YELLOW << name << "'s hand:" << RESET << std::endl;
+                std::cout << displayCards(showdownCards); // Use displayCards to show suits
             }
+            // ===== END MODIFICATION =====
              else if (msg.find("Pot: ") != std::string::npos) {
                  // Color Pot line green
                  std::cout << GREEN << msg << RESET << std::endl;
@@ -155,7 +165,7 @@ void receiveMessages() {
                  // Color raise action green
                  std::cout << GREEN << msg << RESET << std::endl;
              }
-             else if (msg.find(" wins ") != std::string::npos) {
+             else if (msg.find(" wins ") != std::string::npos || msg.find("Split pot!") != std::string::npos) {
                   // Color winner announcement green and bold
                  std::cout << BOLD << GREEN << msg << RESET << std::endl;
              }
@@ -226,3 +236,4 @@ int main() {
     close(g_sock);
     return 0;
 }
+
