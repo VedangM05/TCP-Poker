@@ -11,6 +11,18 @@
 
 #define PORT 5555
 
+// --- ANSI Color Codes ---
+#define RESET   "\033[0m"
+#define BOLD    "\033[1m"
+#define RED     "\033[31m"      /* Red */
+#define GREEN   "\033[32m"      /* Green */
+#define YELLOW  "\033[33m"      /* Yellow */
+#define BLUE    "\033[34m"      /* Blue */
+#define MAGENTA "\033[35m"      /* Magenta */
+#define CYAN    "\033[36m"      /* Cyan */
+#define WHITE   "\033[37m"      /* White */
+// --- End Color Codes ---
+
 int g_sock = 0;
 std::atomic<bool> g_myTurn{false};
 std::vector<std::string> g_holeCards;
@@ -19,36 +31,35 @@ std::vector<std::string> g_communityCards;
 
 // ===== REWRITTEN: Utility to Display Cards =====
 // This version now translates ASCII letters back to Unicode symbols
+// ===== REWRITTEN: Utility to Display Cards (with Colors) =====
 std::string displayCards(const std::vector<std::string> &cards) {
     std::stringstream ss;
     for (int line = 0; line < 5; line++) {
         for (const auto &c_str : cards) {
             if (c_str.empty()) continue;
-            
+
             std::string rank = c_str.substr(0, c_str.size() - 1);
-            std::string suit_letter(1, c_str.back()); 
+            std::string suit_letter(1, c_str.back());
+            std::string displaySuit = "?";
+            std::string color = WHITE; // Default color
+
+            if (suit_letter == "H") { displaySuit = "♥"; color = RED; }
+            else if (suit_letter == "D") { displaySuit = "♦"; color = RED; }
+            else if (suit_letter == "C") { displaySuit = "♣"; color = CYAN; } // Use Cyan instead of Black for visibility
+            else if (suit_letter == "S") { displaySuit = "♠"; color = CYAN; }
 
             if (line == 0) ss << "┌─────┐ ";
-            else if (line == 1) ss << "│" << rank << (rank.size() == 1 ? "    │ " : "   │ ");
-            else if (line == 2) {
-                // NEW: Translate ASCII suit to Unicode for client display
-                std::string displaySuit = "?";
-                if (suit_letter == "H") displaySuit = "♥";
-                else if (suit_letter == "D") displaySuit = "♦";
-                else if (suit_letter == "C") displaySuit = "♣";
-                else if (suit_letter == "S") displaySuit = "♠";
-                ss << "│  " << displaySuit << "  │ ";
-            }
-            else if (line == 3) ss << "│" << (rank.size() == 1 ? "    " : "   ") << rank << "│ ";
+            else if (line == 1) ss << "│" << color << rank << RESET << (rank.size() == 1 ? "    │ " : "   │ ");
+            else if (line == 2) ss << "│  " << color << displaySuit << RESET << "  │ ";
+            else if (line == 3) ss << "│" << (rank.size() == 1 ? "    " : "   ") << color << rank << RESET << "│ ";
             else ss << "└─────┘ ";
         }
         ss << "\n";
     }
     return ss.str();
 }
-
 // ===== REWRITTEN: Receive Thread =====
-// ===== REWRITTEN: Receive Thread =====
+// ===== REWRITTEN: Receive Thread (with Colors) =====
 void receiveMessages() {
     char buffer[1024];
     std::string networkBuffer = "";
@@ -56,7 +67,7 @@ void receiveMessages() {
     while(true) {
         int valread = read(g_sock, buffer, 1023);
         if(valread <= 0) {
-            std::cout << "Disconnected from server." << std::endl;
+            std::cout << RED << "Disconnected from server." << RESET << std::endl;
             g_myTurn = false;
             close(g_sock);
             exit(0);
@@ -69,15 +80,15 @@ void receiveMessages() {
             std::string msg = networkBuffer.substr(0, pos);
             networkBuffer.erase(0, pos + 1);
 
-            // --- Process the clean message ---
+            // --- Process the clean message with Colors ---
 
             if (msg.find("GAME_STARTING") != std::string::npos) {
                 g_communityCards.clear();
-                std::cout << "\n-------------------------------\n";
-                std::cout << "--- NEW HAND STARTING ---\n" << std::endl;
+                std::cout << "\n" << MAGENTA << "-------------------------------" << RESET << "\n";
+                std::cout << BOLD << MAGENTA << "--- NEW HAND STARTING ---" << RESET << "\n" << std::endl;
             }
             else if (msg.find("YOUR_MOVE") != std::string::npos) {
-                std::cout << "\n>>> YOUR TURN TO ACT <<<" << std::endl;
+                std::cout << "\n" << BOLD << CYAN << ">>> YOUR TURN TO ACT <<<" << RESET << std::endl;
                 g_myTurn = true;
             }
             else if (msg.find("HOLE ") == 0) {
@@ -86,8 +97,8 @@ void receiveMessages() {
                 std::stringstream ss_cards(rest);
                 std::string card;
                 while (ss_cards >> card) { g_holeCards.push_back(card); }
-                std::cout << "--- Your Hole Cards ---" << std::endl;
-                std::cout << displayCards(g_holeCards) << std::endl;
+                std::cout << YELLOW << "--- Your Hole Cards ---" << RESET << std::endl;
+                std::cout << displayCards(g_holeCards); // displayCards now handles colors
             }
             else if (msg.find("CARDS ") == 0) {
                 g_communityCards.clear();
@@ -96,13 +107,18 @@ void receiveMessages() {
                 std::string card;
                 while (ss_cards >> card) { g_communityCards.push_back(card); }
 
-                if (g_communityCards.size() == 3) std::cout << "\n--- FLOP ---";
-                else if (g_communityCards.size() == 4) std::cout << "\n--- TURN ---";
-                else if (g_communityCards.size() == 5) std::cout << "\n--- RIVER ---";
+                std::string stageName = "";
+                if (g_communityCards.size() == 3) stageName = "FLOP";
+                else if (g_communityCards.size() == 4) stageName = "TURN";
+                else if (g_communityCards.size() == 5) stageName = "RIVER";
 
-                std::cout << "\n--- Your Hand ---" << std::endl;
+                if (!stageName.empty()) {
+                     std::cout << "\n" << MAGENTA << "--- " << stageName << " ---" << RESET;
+                }
+
+                std::cout << "\n" << YELLOW << "--- Your Hand ---" << RESET << std::endl;
                 std::cout << displayCards(g_holeCards);
-                std::cout << "--- Community Cards ---" << std::endl;
+                std::cout << YELLOW << "--- Community Cards ---" << RESET << std::endl;
                 std::cout << displayCards(g_communityCards) << std::endl;
             }
             else if (msg.find("CHAT:") == 0) {
@@ -111,39 +127,44 @@ void receiveMessages() {
                 if (colonPos != std::string::npos) {
                     std::string name = chat.substr(0, colonPos);
                     std::string chatMsg = chat.substr(colonPos + 1);
-                    std::cout << "[" << name << "]: " << chatMsg << std::endl;
+                    std::cout << "[" << YELLOW << name << RESET << "]: " << chatMsg << std::endl;
                 }
             }
-            // --- NEW: Check for Showdown Hand Message ---
             else if (msg.find("'s hand: ") != std::string::npos) {
-                // Found a message like "ved's hand: KD KH"
-                std::string translated_msg = msg;
-                // Replace letters with symbols
-                size_t start_pos = 0;
-                while((start_pos = translated_msg.find("H", start_pos)) != std::string::npos) {
-                    translated_msg.replace(start_pos, 1, "♥");
-                    start_pos += std::string("♥").length(); // Move past the replaced symbol
-                }
-                start_pos = 0;
-                 while((start_pos = translated_msg.find("D", start_pos)) != std::string::npos) {
-                    translated_msg.replace(start_pos, 1, "♦");
-                    start_pos += std::string("♦").length();
-                }
-                 start_pos = 0;
-                 while((start_pos = translated_msg.find("C", start_pos)) != std::string::npos) {
-                    translated_msg.replace(start_pos, 1, "♣");
-                    start_pos += std::string("♣").length();
-                }
-                 start_pos = 0;
-                 while((start_pos = translated_msg.find("S", start_pos)) != std::string::npos) {
-                    translated_msg.replace(start_pos, 1, "♠");
-                    start_pos += std::string("♠").length();
-                }
-                std::cout << translated_msg << std::endl; // Print translated version
+                // Showdown hands - Already handled by displayCards logic if we parsed into cards
+                // For simplicity, just color the name for now.
+                 size_t nameEndPos = msg.find("'s hand: ");
+                 std::string name = msg.substr(0, nameEndPos);
+                 std::string rest = msg.substr(nameEndPos);
+                 std::cout << YELLOW << name << RESET << rest << std::endl;
+                 // We could parse 'rest' into cards and use displayCards for colored suits here too.
             }
-            // --- End Showdown Hand Check ---
+             else if (msg.find("Pot: ") != std::string::npos) {
+                 // Color Pot line green
+                 std::cout << GREEN << msg << RESET << std::endl;
+             }
+             else if (msg.find(" folds.") != std::string::npos) {
+                 // Color fold action red
+                 std::cout << RED << msg << RESET << std::endl;
+             }
+             else if (msg.find(" checks.") != std::string::npos || msg.find(" calls ") != std::string::npos) {
+                 // Color check/call action yellow
+                 std::cout << YELLOW << msg << RESET << std::endl;
+             }
+              else if (msg.find(" raises ") != std::string::npos) {
+                 // Color raise action green
+                 std::cout << GREEN << msg << RESET << std::endl;
+             }
+             else if (msg.find(" wins ") != std::string::npos) {
+                  // Color winner announcement green and bold
+                 std::cout << BOLD << GREEN << msg << RESET << std::endl;
+             }
+             else if (msg.find("--- SHOWDOWN ---") != std::string::npos || msg.find("--- Hand Over ---") != std::string::npos) {
+                  // Color delimiters magenta
+                 std::cout << MAGENTA << msg << RESET << std::endl;
+             }
             else {
-                // Print all other server messages normally
+                // Print all other server messages normally (white)
                 std::cout << msg << std::endl;
             }
         }
