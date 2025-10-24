@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <sstream>
 #include <atomic> // For myTurn
+#include <cctype> // For ::isspace
 
 #define PORT 5555
 
@@ -139,11 +140,27 @@ void receiveMessages() {
                 std::string cardData = msg.substr(nameEndPos + 10); 
 
                 std::vector<std::string> showdownCards;
-                std::stringstream ss_cards(cardData);
-                std::string card;
-                while (ss_cards >> card) {
-                    showdownCards.push_back(card);
+                
+                // --- NEW PARSING LOGIC ---
+                // Replace stringstream with manual split
+                std::string card1, card2;
+                size_t spacePos = cardData.find(' ');
+                
+                if (spacePos != std::string::npos) {
+                    card1 = cardData.substr(0, spacePos);
+                    card2 = cardData.substr(spacePos + 1);
+                    // Remove potential extra spaces or newlines from card2
+                    card2.erase(std::remove_if(card2.begin(), card2.end(), ::isspace), card2.end());
+
+                    if (!card1.empty()) showdownCards.push_back(card1);
+                    if (!card2.empty()) showdownCards.push_back(card2);
+                } else {
+                    // Only one card found? (Shouldn't happen, but good to handle)
+                    cardData.erase(std::remove_if(cardData.begin(), cardData.end(), ::isspace), cardData.end());
+                    if (!cardData.empty()) showdownCards.push_back(cardData);
                 }
+                // --- END NEW PARSING LOGIC ---
+
 
                 std::cout << YELLOW << name << "'s hand:" << RESET << std::endl;
                 std::cout << displayCards(showdownCards); // Use displayCards to show suits
