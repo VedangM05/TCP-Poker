@@ -31,12 +31,6 @@ std::mutex g_inbound_mutex;
 std::mutex g_io_mutex; // For protecting std::cout
 std::mutex g_players_mutex; // For protecting players list
 
-// ===== NEW: clearScreen Function =====
-void clearScreen() {
-    // Uses ANSI escape codes to clear the screen and move cursor to top-left
-    std::cout << "\033[2J\033[1;1H";
-}
-
 // ===== Structures =====
 struct Card {
     std::string rank, suit;
@@ -508,8 +502,7 @@ std::string AIAction(Player &ai, int roundNumber, const std::vector<Card>& mainD
 
 // ===== Table Display =====
 void showTable() {
-    clearScreen(); // NEW: Clear screen
-    std::stringstream ss;
+        std::stringstream ss;
     
     // --- NEW: Player Table Formatting ---
     ss << "\n";
@@ -819,7 +812,6 @@ bool checkIfHandOver() {
 
 // ===== Main =====
 int main() {
-    clearScreen(); // Initial clear
     {
         std::lock_guard<std::mutex> lock(g_io_mutex);
         std::cout << "AI player? (y/n):";
