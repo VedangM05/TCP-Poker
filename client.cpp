@@ -59,7 +59,7 @@ std::string displayCards(const std::vector<std::string> &cards) {
     }
     return ss.str();
 }
-// ===== REWRITTEN: Receive Thread =====
+// ===== REWRITTEN: Receive Thread (with Colors) =====
 // ===== REWRITTEN: Receive Thread (with Colors) =====
 void receiveMessages() {
     char buffer[1024];
@@ -80,6 +80,12 @@ void receiveMessages() {
         while ((pos = networkBuffer.find('\n')) != std::string::npos) {
             std::string msg = networkBuffer.substr(0, pos);
             networkBuffer.erase(0, pos + 1);
+
+            // --- THIS IS THE CRITICAL FIX ---
+            // It MUST be here, right after the message is extracted.
+            msg.erase(std::remove(msg.begin(), msg.end(), '\r'), msg.end());
+            // --- END CRITICAL FIX ---
+
 
             // --- Process the clean message with Colors ---
 
@@ -132,40 +138,43 @@ void receiveMessages() {
                 }
             }
             // ===== MODIFIED: This block now parses cards =====
+// ===== MODIFIED: Showdown hands as TEXT with COLOR SUITS =====
+// ===== MODIFIED: Showdown hands as TEXT with COLOR SUITS =====
             else if (msg.find("'s hand: ") != std::string::npos) {
-                // Parse showdown hands and use displayCards
+                // Parse the message e.g., "AI_Bot's hand: 7D 8S"
                 size_t nameEndPos = msg.find("'s hand: ");
-                std::string name = msg.substr(0, nameEndPos);
-                // Get the card part (e.g., "4C JD") which starts after "'s hand: " (10 chars)
-                std::string cardData = msg.substr(nameEndPos + 10); 
+                std::string namePart = msg.substr(0, nameEndPos + 10); // "AI_Bot's hand: "
+                std::string cardData = msg.substr(nameEndPos + 10);    // "7D 8S"
 
-                std::vector<std::string> showdownCards;
-                
-                // --- NEW PARSING LOGIC ---
-                // Replace stringstream with manual split
-                std::string card1, card2;
-                size_t spacePos = cardData.find(' ');
-                
-                if (spacePos != std::string::npos) {
-                    card1 = cardData.substr(0, spacePos);
-                    card2 = cardData.substr(spacePos + 1);
-                    // Remove potential extra spaces or newlines from card2
-                    card2.erase(std::remove_if(card2.begin(), card2.end(), ::isspace), card2.end());
+                // Print the name part in yellow
+                std::cout << YELLOW << namePart << RESET;
 
-                    if (!card1.empty()) showdownCards.push_back(card1);
-                    if (!card2.empty()) showdownCards.push_back(card2);
-                } else {
-                    // Only one card found? (Shouldn't happen, but good to handle)
-                    cardData.erase(std::remove_if(cardData.begin(), cardData.end(), ::isspace), cardData.end());
-                    if (!cardData.empty()) showdownCards.push_back(cardData);
+                // Now parse and print the cards with color
+                std::stringstream ss_cards(cardData);
+                std::string card;
+                while (ss_cards >> card) {
+                    if (card.empty()) continue;
+
+                    std::string rank = card.substr(0, card.size() - 1);
+                    std::string suit_letter(1, card.back());
+                    std::string displaySuit = "?";
+                    std::string color = WHITE; // Default color
+
+                    // --- THIS IS THE COLOR LOGIC ---
+                    if (suit_letter == "H") { displaySuit = "♥"; color = RED; }
+                    else if (suit_letter == "D") { displaySuit = "♦"; color = RED; }
+                    else if (suit_letter == "C") { displaySuit = "♣"; color = CYAN; }
+                    else if (suit_letter == "S") { displaySuit = "♠"; color = CYAN; }
+                    // --- END COLOR LOGIC ---
+
+                    // --- THIS IS THE FIX ---
+                    // This prints the rank (e.g., "J") and the suit (e.g., "♦")
+                    // in the SAME color (e.g., RED).
+                    std::cout << color << rank << displaySuit << RESET << " ";
                 }
-                // --- END NEW PARSING LOGIC ---
-
-
-                std::cout << YELLOW << name << "'s hand:" << RESET << std::endl;
-                std::cout << displayCards(showdownCards); // Use displayCards to show suits
+                std::cout << std::endl; // End the line
             }
-            // ===== END MODIFICATION =====
+            // ===== END MODIFICATION =====            // ===== END MODIFICATION =====            // ===== END MODIFICATION =====
              else if (msg.find("Pot: ") != std::string::npos) {
                  // Color Pot line green
                  std::cout << GREEN << msg << RESET << std::endl;
@@ -196,7 +205,9 @@ void receiveMessages() {
             }
         }
     }
-}// ===== Main (REWRITTEN Input Loop) =====
+}
+
+// ===== Main Function =====
 int main() {
     std::string serverIP, playerName;
     std::cout << "Enter server IP (e.g., 127.0.0.1): ";
