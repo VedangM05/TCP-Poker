@@ -5,7 +5,7 @@
 #include <mutex>
 #include <algorithm>
 #include <random>
-#include <map>      // For hand evaluator
+#include <map>      // For hand evaluatoR
 #include <set>      // For hand evaluator
 #include <sstream>
 #include <netinet/in.h>
