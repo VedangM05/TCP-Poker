@@ -5,7 +5,7 @@
 #include <mutex>
 #include <algorithm>
 #include <random>
-#include <map>      // For hand evaluatoR
+#include <map>      // For hand evaluator
 #include <set>      // For hand evaluator
 #include <sstream>
 #include <netinet/in.h>
@@ -13,7 +13,7 @@
 #include <queue>
 #include <chrono>
 #include <limits> // For std::numeric_limits
-#include <cstdio> // For snprintf in player table
+#include <cstdio> 
 
 #define PORT 5555
 #define MAX_PLAYERS 4
@@ -110,7 +110,6 @@ void sendToPlayer(Player &p, const std::string &msg) {
     }
 }
 
-// --- UPDATED: Added send() error checking ---
 void broadcast_unsafe(const std::string &msg) {
     std::string fullMsg = msg + "\n";
     for (auto &p : players) {
@@ -383,7 +382,7 @@ std::string AIAction(Player &ai, int roundNumber, const std::vector<Card>& mainD
             std::cout << "\b\b\b..." << std::flush;
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
-        std::cout << "\r" << std::string(30, ' ') << "\r"; // Clear line
+        std::cout << "\r" << std::string(30, ' ') << "\r";
     }
     
     double equity = runMonteCarlo(ai, mainDeck);
@@ -399,7 +398,7 @@ std::string AIAction(Player &ai, int roundNumber, const std::vector<Card>& mainD
         
         std::set<int> ur;
         for (const auto& c : curH) ur.insert(getCardValue(c.rank));
-        if (ur.count(14)) ur.insert(1); // Ace for low straight
+        if (ur.count(14)) ur.insert(1); 
         
         for (int r : ur) {
             if (ur.count(r + 1) && ur.count(r + 2) && ur.count(r + 3)) {
@@ -518,11 +517,11 @@ void showTable() {
             else if (p.folded) status = "FOLDED";
             else if (p.allIn) status = "ALL-IN";
             
-            snprintf(buffer, 100, "│ %-17s │ %-12d │ %-8s │", p.name.substr(0, 17).c_str(), p.chips, status.c_str()); // Limit name length
+            snprintf(buffer, 100, "│ %-17s │ %-12d │ %-8s │", p.name.substr(0, 17).c_str(), p.chips, status.c_str()); 
             ss << buffer << "\n";
         }
         ss << "└───────────────────┴──────────────┴──────────┘\n";
-        ss << "Pot: " << pot << "\n"; // Show pot below table
+        ss << "Pot: " << pot << "\n"; 
     }
     
     broadcast(ss.str());
@@ -611,7 +610,6 @@ std::string getPlayerInput(Player &p) {
                 }
                 return msg.data;
             } else {
-                // Message from another player, handle it and continue waiting
                 handleIncomingMessage(msg.socket, msg.data);
             }
         }
@@ -686,7 +684,7 @@ void bettingRound(int roundNumber) {
                 try {
                     rAmt = std::stoi(action.substr(action.find(" ") + 1));
                 } catch (...) {
-                    rAmt = 50; // Default raise if parse fails
+                    rAmt = 50; 
                 }
                 
                 int total = currentBet + rAmt;
@@ -798,6 +796,25 @@ bool checkIfHandOver() {
     }
     
     if (active <= 1 && winner != nullptr) {
+        
+        // --- NEW: Display all hands on early end ---
+        broadcast("\n--- SHOWING HANDS ---"); 
+        {
+            std::lock_guard<std::mutex> lock(g_players_mutex);
+            for (auto& p : players) {
+                if (p.isConnected && !p.hand.empty()) {
+                    std::string bcHand = p.name + "'s hand: " + p.hand[0].toString() + " " + p.hand[1].toString();
+                    broadcast_unsafe(bcHand); 
+                    std::string coutHand = p.name + "'s hand: " + p.hand[0].rank + p.hand[0].suit + " " + p.hand[1].rank + p.hand[1].suit;
+                    {
+                        std::lock_guard<std::mutex> io(g_io_mutex);
+                        std::cout << coutHand << std::endl;
+                    }
+                }
+            }
+        }
+        // --- END NEW DISPLAY LOGIC ---
+
         std::string msg = winner->name + " wins " + std::to_string(pot) + " (last standing)!";
         broadcast(msg);
         {
@@ -809,7 +826,6 @@ bool checkIfHandOver() {
     }
     return false;
 }
-
 // ===== Main =====
 int main() {
     {
@@ -817,7 +833,7 @@ int main() {
         std::cout << "AI player? (y/n):";
         char c;
         std::cin >> c;
-        std::cin.ignore(); // Consume newline
+        std::cin.ignore(); 
         if (c == 'y' || c == 'Y') {
             Player ai;
             ai.name = "AI_Bot";
@@ -991,18 +1007,24 @@ int main() {
         std::vector<Player*> winners;
         HandResult bestHand = {0, "Nothing"};
 
-        {
+{
             std::lock_guard<std::mutex> lock(g_players_mutex);
             for (auto& p : players) {
-                if (!p.folded && p.isConnected) {
+                // --- NEW DISPLAY LOGIC ---
+                if (p.isConnected && !p.hand.empty()) {
                     std::string bcHand = p.name + "'s hand: " + p.hand[0].toString() + " " + p.hand[1].toString();
                     broadcast_unsafe(bcHand);
+                    
                     std::string coutHand = p.name + "'s hand: " + p.hand[0].rank + p.hand[0].suit + " " + p.hand[1].rank + p.hand[1].suit;
                     {
                         std::lock_guard<std::mutex> io(g_io_mutex);
                         std::cout << coutHand << std::endl;
                     }
-                    
+                }
+
+                // --- WINNER EVALUATION LOGIC ---
+                // Now, separately, check if the player is eligible to win (NOT folded).
+                if (!p.folded && p.isConnected) {
                     HandResult hand = getFullPlayerHand(p, communityCards);
                     
                     if (hand.rank > bestHand.rank) {
@@ -1033,7 +1055,7 @@ int main() {
                     if (i < winners.size() - 1) winnerNames += ", ";
                     winners[i]->chips += splitAmount;
                 }
-                winners[0]->chips += remainder; // Give remainder to first winner
+                winners[0]->chips += remainder; 
                 msg = "Split pot! " + std::to_string(pot) + " split between: " + winnerNames + " with " + bestHand.name;
             }
             broadcast(msg);
@@ -1073,4 +1095,3 @@ int main() {
     std::cout << "Game Over.\n";
     return 0;
 }
-
