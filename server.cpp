@@ -8,12 +8,34 @@
 #include <map>      // For hand evaluator
 #include <set>      // For hand evaluator
 #include <sstream>
+#ifndef _WIN32
 #include <netinet/in.h>
 #include <unistd.h>
+#endif
 #include <queue>
 #include <chrono>
 #include <limits> // For std::numeric_limits
 #include <cstdio> 
+#include <signal.h>
+#include <errno.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "Ws2_32.lib")
+#endif
+
+#ifdef _WIN32
+using socket_t = SOCKET;
+#define READSOCK(s,b,l) recv((SOCKET)(s), (char*)(b), (int)(l), 0)
+#define CLOSESOCK(s) closesocket((SOCKET)(s))
+#define INVALID_SOCKET_VAL INVALID_SOCKET
+#else
+using socket_t = int;
+#define READSOCK(s,b,l) read((s),(b),(l))
+#define CLOSESOCK(s) close((s))
+#define INVALID_SOCKET_VAL (-1)
+#endif
 
 #define PORT 5555
 #define MAX_PLAYERS 4
@@ -23,7 +45,7 @@
 
 // Thread-safe message queue for all client input
 struct Message {
-    int socket;
+    socket_t socket;
     std::string data;
 };
 std::queue<Message> g_inbound_messages;
@@ -55,7 +77,7 @@ struct Player {
     bool folded;
     bool allIn;
     std::vector<Card> hand;
-    int socket;
+    socket_t socket;
     bool isAI;
     int currentBet;
     bool isConnected;
@@ -63,7 +85,7 @@ struct Player {
     int vpipActions = 0;
     int pfrActions = 0;
 
-    Player() : chips(STARTING_CHIPS), folded(false), allIn(false), socket(-1),
+    Player() : chips(STARTING_CHIPS), folded(false), allIn(false), socket(INVALID_SOCKET_VAL),
                isAI(false), currentBet(0), isConnected(true) {}
 };
 
@@ -81,7 +103,8 @@ int currentBet = 0;
 bool g_preFlopRaiseMade = false;
 
 // ===== Utility Functions =====
-Player* getPlayerBySocket(int socket) {
+Player* getPlayerBySocket(socket_t socket) {
+    std::lock_guard<std::mutex> lock(g_players_mutex);
     for (auto &p : players) {
         if (p.socket == socket) {
             return &p;
@@ -99,13 +122,37 @@ Player* getHumanOpponent() {
     return nullptr;
 }
 
-// --- UPDATED: Added send() error checking ---
+// Robust send-all helper. Returns true on success, false on failure.
+static bool sendAll(socket_t sock, const char* data, size_t len) {
+    size_t total = 0;
+    while (total < len) {
+        int n = (int)send(sock, data + total, (int)(len - total), 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        if (n == 0) return false;
+        total += static_cast<size_t>(n);
+    }
+    return true;
+}
+
+// --- UPDATED: sendAll + disconnect on failure ---
 void sendToPlayer(Player &p, const std::string &msg) {
-    if (!p.isAI && p.socket != -1 && p.isConnected) {
+    if (!p.isAI && p.socket != INVALID_SOCKET_VAL && p.isConnected) {
         std::string fullMsg = msg + "\n";
-        if (send(p.socket, fullMsg.c_str(), fullMsg.size(), 0) == -1) {
-            std::lock_guard<std::mutex> lock(g_io_mutex);
-            std::cout << "[Network] Failed to send to " << p.name << std::endl;
+        if (!sendAll(p.socket, fullMsg.c_str(), fullMsg.size())) {
+            {
+                std::lock_guard<std::mutex> lock(g_io_mutex);
+                std::cout << "[Network] Failed to send to " << p.name << " (disconnecting)" << std::endl;
+            }
+            p.isConnected = false;
+            {
+                std::lock_guard<std::mutex> lock(g_inbound_mutex);
+                g_inbound_messages.push({p.socket, "DISCONNECTED"});
+            }
+            CLOSESOCK(p.socket);
+            p.socket = INVALID_SOCKET_VAL;
         }
     }
 }
@@ -113,10 +160,19 @@ void sendToPlayer(Player &p, const std::string &msg) {
 void broadcast_unsafe(const std::string &msg) {
     std::string fullMsg = msg + "\n";
     for (auto &p : players) {
-        if (!p.isAI && p.socket != -1 && p.isConnected) {
-            if (send(p.socket, fullMsg.c_str(), fullMsg.size(), 0) == -1) {
-                std::lock_guard<std::mutex> lock(g_io_mutex);
-                std::cout << "[Network] Failed to broadcast to " << p.name << std::endl;
+        if (!p.isAI && p.socket != INVALID_SOCKET_VAL && p.isConnected) {
+            if (!sendAll(p.socket, fullMsg.c_str(), fullMsg.size())) {
+                {
+                    std::lock_guard<std::mutex> lock(g_io_mutex);
+                    std::cout << "[Network] Failed to broadcast to " << p.name << " (disconnecting)" << std::endl;
+                }
+                p.isConnected = false;
+                {
+                    std::lock_guard<std::mutex> lock(g_inbound_mutex);
+                    g_inbound_messages.push({p.socket, "DISCONNECTED"});
+                }
+                CLOSESOCK(p.socket);
+                p.socket = INVALID_SOCKET_VAL;
             }
         }
     }
@@ -571,7 +627,7 @@ void resetForNextHand() {
 }
 
 // ===== Handle Incoming Messages =====
-void handleIncomingMessage(int s, const std::string& d) {
+void handleIncomingMessage(socket_t s, const std::string& d) {
     Player* p = getPlayerBySocket(s);
     if (!p) return;
     
@@ -750,12 +806,12 @@ void bettingRound(int roundNumber) {
 }
 
 // ===== Client Handler =====
-void clientHandler(int sock) {
+void clientHandler(socket_t sock) {
     char buf[1024];
     std::string netBuf = "";
     try {
         while (true) {
-            int vr = read(sock, buf, 1023);
+            int vr = READSOCK(sock, buf, 1023);
             if (vr <= 0) {
                 std::lock_guard<std::mutex> lock(g_inbound_mutex);
                 g_inbound_messages.push({sock, "DISCONNECTED"});
@@ -778,7 +834,7 @@ void clientHandler(int sock) {
         std::lock_guard<std::mutex> lock(g_io_mutex);
         std::cerr << "Ex clientHandler:" << e.what() << std::endl;
     }
-    close(sock);
+    CLOSESOCK(sock);
 }
 
 // ===== Check if Hand Over =====
@@ -828,6 +884,19 @@ bool checkIfHandOver() {
 }
 // ===== Main =====
 int main() {
+    // Prevent SIGPIPE on POSIX; initialize Winsock on Windows
+#ifndef _WIN32
+    signal(SIGPIPE, SIG_IGN);
+#else
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2,2), &wsaData) != 0) {
+        {
+            std::lock_guard<std::mutex> lock(g_io_mutex);
+            std::cerr << "WSAStartup failed" << std::endl;
+        }
+        return 1;
+    }
+#endif
     {
         std::lock_guard<std::mutex> lock(g_io_mutex);
         std::cout << "AI player? (y/n):";
@@ -843,13 +912,17 @@ int main() {
         }
     }
     
-    int server_fd;
+    socket_t server_fd;
     struct sockaddr_in address;
     int opt = 1;
     socklen_t addrlen = sizeof(address);
     
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
+#ifdef _WIN32
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+#else
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt));
+#endif
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(PORT);
@@ -864,35 +937,86 @@ int main() {
     // --- Connection Accepting Thread ---
     std::thread([&]() {
         while (true) {
-            int sock = accept(server_fd, (struct sockaddr*)&address, &addrlen);
+            socket_t sock = accept(server_fd, (struct sockaddr*)&address, &addrlen);
+#ifdef _WIN32
+            if (sock == INVALID_SOCKET) continue;
+#else
             if (sock < 0) continue;
-            
-            char b[1024] = {0};
-            int vr = read(sock, b, 1024);
-            if (vr <= 0) {
-                close(sock);
-                continue;
-            }
-            
-            std::string pn(b, vr);
-            pn.erase(std::remove(pn.begin(), pn.end(), '\n'), pn.end());
-            pn.erase(std::remove(pn.begin(), pn.end(), '\r'), pn.end());
-            
-            {
-                std::lock_guard<std::mutex> lock(g_players_mutex);
-                if (players.size() >= MAX_PLAYERS) {
-                    send(sock, "SERVER_FULL\n", 12, 0);
-                    close(sock);
-                    continue;
+#endif
+            // Enable keepalive and disable SIGPIPE on this socket (macOS)
+            int one = 1;
+        #ifdef _WIN32
+            setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, (const char*)&one, sizeof(one));
+        #else
+            setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+        #endif
+#ifdef SO_NOSIGPIPE
+            setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
+            // Read the player name as a line terminated by '\n'
+            std::string nb;
+            char b[1024];
+            while (true) {
+                int vr = READSOCK(sock, b, sizeof(b));
+#ifdef _WIN32
+                if (vr <= 0) { CLOSESOCK(sock); sock = INVALID_SOCKET_VAL; break; }
+#else
+                if (vr <= 0) { CLOSESOCK(sock); sock = INVALID_SOCKET_VAL; break; }
+#endif
+                nb.append(b, b + vr);
+                size_t nl = nb.find('\n');
+                if (nl != std::string::npos) {
+                    // Extract name up to newline
+                    std::string pn = nb.substr(0, nl);
+                    pn.erase(std::remove(pn.begin(), pn.end(), '\r'), pn.end());
+
+                    // Any extra complete lines after name: push to inbound queue
+                    std::string rest = nb.substr(nl + 1);
+                    size_t pos = 0;
+                    while ((pos = rest.find('\n')) != std::string::npos) {
+                        std::string msg = rest.substr(0, pos);
+                        msg.erase(std::remove(msg.begin(), msg.end(), '\r'), msg.end());
+                        {
+                            std::lock_guard<std::mutex> lock(g_inbound_mutex);
+                            g_inbound_messages.push({sock, msg});
+                        }
+                        rest.erase(0, pos + 1);
+                    }
+
+                    // Register player
+                    {
+                        std::lock_guard<std::mutex> lock(g_players_mutex);
+                        if (players.size() >= MAX_PLAYERS) {
+                            std::string full = "SERVER_FULL\n";
+                            sendAll(sock, full.c_str(), full.size());
+                            CLOSESOCK(sock);
+                            sock = INVALID_SOCKET_VAL;
+                            break;
+                        }
+                        Player p;
+                        p.name = pn;
+                        p.socket = sock;
+                        players.push_back(p);
+                        std::string w = "WELCOME " + pn + "\n";
+                        sendAll(sock, w.c_str(), w.size());
+                        {
+                            std::lock_guard<std::mutex> io(g_io_mutex);
+                            std::cout << pn << " connected.\n";
+                        }
+                    }
+                    break; // Done with handshake
                 }
-                Player p;
-                p.name = pn;
-                p.socket = sock;
-                players.push_back(p);
-                send(sock, ("WELCOME " + pn + "\n").c_str(), pn.size() + 9, 0);
-                std::cout << pn << " connected.\n";
+                // continue reading until newline
             }
-            std::thread(clientHandler, sock).detach();
+        #ifdef _WIN32
+            if (sock == INVALID_SOCKET_VAL) continue;
+        #else
+            if (sock == INVALID_SOCKET_VAL) continue;
+        #endif
+            {
+                // Start client handler after successful registration
+                std::thread(clientHandler, sock).detach();
+            }
         }
     }).detach();
     
@@ -1093,5 +1217,8 @@ int main() {
     }
     
     std::cout << "Game Over.\n";
+#ifdef _WIN32
+    WSACleanup();
+#endif
     return 0;
 }
