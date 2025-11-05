@@ -3,12 +3,34 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#ifndef _WIN32
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#endif
 #include <sstream>
 #include <atomic>
 #include <cctype> 
+#include <signal.h>
+#include <errno.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "Ws2_32.lib")
+#endif
+
+#ifdef _WIN32
+using socket_t = SOCKET;
+#define READSOCK(s,b,l) recv((SOCKET)(s), (char*)(b), (int)(l), 0)
+#define CLOSESOCK(s) closesocket((SOCKET)(s))
+#define INVALID_SOCKET_VAL INVALID_SOCKET
+#else
+using socket_t = int;
+#define READSOCK(s,b,l) read((s),(b),(l))
+#define CLOSESOCK(s) close((s))
+#define INVALID_SOCKET_VAL (-1)
+#endif
 
 #define PORT 5555
 
@@ -23,10 +45,24 @@
 #define CYAN    "\033[36m"     
 #define WHITE   "\033[37m"      
 
-int g_sock = 0;
+socket_t g_sock = 0;
 std::atomic<bool> g_myTurn{false};
 std::vector<std::string> g_holeCards;
 std::vector<std::string> g_communityCards;
+
+static bool sendAll(int sock, const char* data, size_t len) {
+    size_t total = 0;
+    while (total < len) {
+        int n = (int)send(sock, data + total, (int)(len - total), 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        if (n == 0) return false;
+        total += static_cast<size_t>(n);
+    }
+    return true;
+}
 
 std::string displayCards(const std::vector<std::string> &cards) {
     std::stringstream ss;
@@ -60,11 +96,11 @@ void receiveMessages() {
     std::string networkBuffer = "";
 
     while(true) {
-        int valread = read(g_sock, buffer, 1023);
+        int valread = READSOCK(g_sock, buffer, 1023);
         if(valread <= 0) {
             std::cout << RED << "Disconnected from server." << RESET << std::endl;
             g_myTurn = false;
-            close(g_sock);
+            CLOSESOCK(g_sock);
             exit(0);
         }
         buffer[valread] = '\0';
@@ -193,6 +229,14 @@ void receiveMessages() {
 
 // ===== Main Function =====
 int main() {
+#ifndef _WIN32
+    signal(SIGPIPE, SIG_IGN);
+#else
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2,2), &wsaData) != 0) {
+        std::cout << "WSAStartup failed.\n"; return -1;
+    }
+#endif
     std::string serverIP, playerName;
     std::cout << "Enter server IP (e.g., 127.0.0.1): ";
     std::getline(std::cin, serverIP);
@@ -201,6 +245,15 @@ int main() {
 
     struct sockaddr_in serv_addr;
     g_sock = socket(AF_INET, SOCK_STREAM, 0);
+    int one = 1;
+#ifdef _WIN32
+    setsockopt(g_sock, SOL_SOCKET, SO_KEEPALIVE, (const char*)&one, sizeof(one));
+#else
+    setsockopt(g_sock, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+#endif
+#ifdef SO_NOSIGPIPE
+    setsockopt(g_sock, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(PORT);
 
@@ -211,7 +264,12 @@ int main() {
         std::cout << "Connection failed.\n"; return -1;
     }
 
-    send(g_sock, (playerName + "\n").c_str(), playerName.size() + 1, 0);
+    {
+        std::string reg = playerName + "\n";
+        if (!sendAll(g_sock, reg.c_str(), reg.size())) {
+            std::cout << "Failed to send name to server.\n"; return -1;
+        }
+    }
 
     std::thread recvThread(receiveMessages);
     recvThread.detach();
@@ -226,7 +284,9 @@ int main() {
 
         if (input.find("/chat ") == 0) {
             std::string chatMsg = "CHAT:" + input.substr(6) + "\n";
-            send(g_sock, chatMsg.c_str(), chatMsg.size(), 0);
+            if (!sendAll(g_sock, chatMsg.c_str(), chatMsg.size())) {
+                std::cout << RED << "Disconnected from server." << RESET << std::endl; break;
+            }
         }
         else if (g_myTurn) {
             std::string upperInput = input;
@@ -236,7 +296,10 @@ int main() {
                 upperInput.find("RAISE") != 0 && upperInput.find("CHECK") != 0) {
                 std::cout << "Invalid command. Use FOLD, CALL, CHECK, or RAISE <amount>." << std::endl;
             } else {
-                send(g_sock, (input + "\n").c_str(), input.size() + 1, 0);
+                std::string line = input + "\n";
+                if (!sendAll(g_sock, line.c_str(), line.size())) {
+                    std::cout << RED << "Disconnected from server." << RESET << std::endl; break;
+                }
                 g_myTurn = false;
             }
         }
@@ -245,6 +308,9 @@ int main() {
         }
     }
 
-    close(g_sock);
+    CLOSESOCK(g_sock);
+#ifdef _WIN32
+    WSACleanup();
+#endif
     return 0;
 }
